@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Kreait\Firebase;
 
+use Firebase\JWT\CachedKeySet;
+use GuzzleHttp\Psr7\HttpFactory;
 use Beste\Clock\SystemClock;
 use Beste\Clock\WrappingClock;
 use Google\Auth\ApplicationDefaultCredentials;
@@ -77,6 +79,7 @@ final class Factory
     private CacheItemPoolInterface $authTokenCache;
     private bool $discoveryIsDisabled = false;
     private ClockInterface $clock;
+    private CacheItemPoolInterface $keySetCache;
 
     /** @var callable|null */
     private $httpLogMiddleware;
@@ -95,6 +98,15 @@ final class Factory
         $this->verifierCache = new MemoryCacheItemPool();
         $this->authTokenCache = new MemoryCacheItemPool();
         $this->httpClientOptions = HttpClientOptions::default();
+        $this->keySetCache = new MemoryCacheItemPool();
+    }
+
+    public function withKeySetCache(CacheItemPoolInterface $cache): self
+    {
+        $factory = clone $this;
+        $factory->keySetCache = $cache;
+
+        return $factory;
     }
 
     /**
@@ -684,5 +696,39 @@ final class Factory
         } catch (Throwable $e) {
             return null;
         }
+    }
+    public function createAppCheck(): Contract\AppCheck
+    {
+        $projectId = $this->getProjectId();
+
+        if ($this->serviceAccount === null) {
+            throw new RuntimeException('Unable to use AppCheck without credentials');
+        }
+
+        $http = $this->createApiClient([
+            'base_uri' => 'https://firebaseappcheck.googleapis.com/v1/projects/'.$projectId.'/',
+        ]);
+
+        $keySet = new CachedKeySet(
+            'https://firebaseappcheck.googleapis.com/v1/jwks',
+            new Client(),
+            new HttpFactory(),
+            $this->keySetCache,
+            21600,
+            true,
+        );
+
+        $serviceAccount = (array)$this->serviceAccount;
+        $key = array_key_first($serviceAccount);
+        $serviceAccount = $serviceAccount[$key];
+        return new AppCheck(
+            new AppCheck\ApiClient($http),
+            new AppCheck\AppCheckTokenGenerator(
+                $serviceAccount['client_email'],
+                $serviceAccount['private_key'],
+                $this->clock,
+            ),
+            new AppCheck\AppCheckTokenVerifier($projectId, $keySet),
+        );
     }
 }

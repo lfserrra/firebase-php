@@ -13,3 +13,4 @@
 /phpstan.neon
 /phpstan-for-rector.neon
 /phpunit.xml
+.DS_Store
